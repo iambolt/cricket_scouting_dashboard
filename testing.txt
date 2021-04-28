@@ -1,0 +1,253 @@
+import plotly.express as px
+import plotly.graph_objects as go
+import plotly.subplots as sub
+import dash
+import dash_core_components as dcc
+import dash_html_components as html
+import dash_bootstrap_components as dbc
+from dash.dependencies import Input, Output, State
+import aerosandbox as asb
+import casadi as cas
+from airplane import make_airplane
+import numpy as np
+import pandas as pd
+
+app = dash.Dash(external_stylesheets=[dbc.themes.MINTY])
+server = app.server
+
+app.layout = dbc.Container(
+    [
+        dbc.Row([
+            dbc.Col([
+                html.H2("Players Performance Dashboard (India Domestic)"),
+                html.H5("Nishant Singh Siddhu"),
+            ], width=True),], align="end"),
+        html.Hr(),
+        dbc.Row([
+            dbc.Col([
+                html.Div([
+                    html.H5("Key Parameters"),
+                    html.P("Select the Series"),
+                    
+                    dbc.DropdownMenu(
+                                label="Select",
+                                children=[
+                                    dbc.DropdownMenuItem("SYED MUSHTAQ ALI TROPHY"),
+                                    dbc.DropdownMenuItem("VIJAY HAZARE TROPHY")],
+                                    style={"display": "flex", "flexWrap": "wrap"}),
+
+                    html.P("Select the year"), 
+                    dcc.Slider(
+                    min=2019,
+                    max=2021,
+                    value=2021,
+                        marks={
+                            2019: {'label': '2019'},
+                            2020: {'label': '2020'},
+                            2021: {'label': '2021'},
+                            },included=False),
+                ]),
+                html.Hr(),
+                html.Div([
+                    html.H5("Select Batsmen type"),
+                    dbc.Button("Openers", id="display_op", color="dark", style={"margin": "5px"},
+                               n_clicks_timestamp='0'),
+                    dbc.Button("Middle Order", id="display_mo", color="dark", style={"margin": "5px"},
+                               n_clicks_timestamp='0'),
+                    dbc.Button("Lower Middle Order", id="display_lmo", color="dark",
+                               style={"margin": "5px"}, n_clicks_timestamp='0'),
+                    dbc.Button("Wicket keepers", id="display_wkb", color="dark",
+                               style={"margin": "5px"}, n_clicks_timestamp='0'),
+                ]),
+                html.Hr(),
+
+            ], width=3),
+
+
+        ]),
+        html.Hr(),
+        html.P([
+            html.A("Source code", href="https://github.com/iambolt/cricket_scouting_dashboard"),
+            ". Build beautiful UIs for your scientific computing apps with ",
+            html.A("Plot.ly ", href="https://plotly.com/"),
+            "and ",
+            html.A("Dash", href="https://plotly.com/dash/"),
+            "!",
+        ]),
+    ],
+    fluid=True
+)
+
+
+def make_table(dataframe):
+    return dbc.Table.from_dataframe(
+        dataframe,
+        bordered=True,
+        hover=True,
+        responsive=True,
+        striped=True,
+        style={
+
+        }
+    )
+
+
+@app.callback(
+    [Output('display', 'figure'),
+     Output('output', 'children')
+     ],
+    [
+        Input('display_geometry', 'n_clicks_timestamp'),
+        Input('run_ll_analysis', 'n_clicks_timestamp'),
+        Input('run_vlm_analysis', 'n_clicks_timestamp'),
+    ],
+    [
+        State('n_booms', 'value'),
+        State('wing_span', 'value'),
+        State('alpha', 'value'),
+    ]
+)
+def display_geometry(
+        display_geometry,
+        run_ll_analysis,
+        run_vlm_analysis,
+        n_booms,
+        wing_span,
+        alpha,
+):
+    ### Figure out which button was clicked
+    try:
+        button_pressed = np.argmax(np.array([
+            float(display_geometry),
+            float(run_ll_analysis),
+            float(run_vlm_analysis),
+        ]))
+        assert button_pressed is not None
+    except:
+        button_pressed = 0
+
+    ### Make the airplane
+    airplane = make_airplane(
+        n_booms=n_booms,
+        wing_span=wing_span,
+    )
+    op_point = asb.OperatingPoint(
+        density=0.10,
+        velocity=20,
+        alpha=alpha,
+    )
+    if button_pressed == 0:
+        # Display the geometry
+        figure = airplane.draw(show=False, colorbar_title=None)
+        output = "Please run an analysis to display the data."
+    elif button_pressed == 1:
+        # Run an analysis
+        opti = cas.Opti()  # Initialize an analysis/optimization environment
+        ap = asb.Casll1(
+            airplane=airplane,
+            op_point=op_point,
+            opti=opti,
+            run_setup=False
+        )
+        ap.setup(
+            verbose=False
+        )
+        # Solver options
+        p_opts = {}
+        s_opts = {}
+        # s_opts["mu_strategy"] = "adaptive"
+        opti.solver('ipopt', p_opts, s_opts)
+        # Solve
+        try:
+            sol = opti.solve()
+            output = make_table(pd.DataFrame(
+                {
+                    "Figure": [
+                        "CL",
+                        "CD",
+                        "CDi",
+                        "CDp",
+                        "L/D"
+                    ],
+                    "Value" : [
+                        sol.value(ap.CL),
+                        sol.value(ap.CD),
+                        sol.value(ap.CDi),
+                        sol.value(ap.CDp),
+                        sol.value(ap.CL / ap.CD),
+                    ]
+                }
+            ))
+        except:
+            sol = opti.debug
+            output = html.P(
+                "Aerodynamic analysis failed! Most likely the airplane is stalled at this flight condition."
+            )
+
+        figure = ap.draw(show=False)  # Generates figure
+
+
+
+    elif button_pressed == 2:
+        # Run an analysis
+        opti = cas.Opti()  # Initialize an analysis/optimization environment
+        ap = asb.Casvlm1(
+            airplane=airplane,
+            op_point=op_point,
+            opti=opti,
+            run_setup=False
+        )
+        ap.setup(
+            verbose=False
+        )
+        # Solver options
+        p_opts = {}
+        s_opts = {}
+        s_opts["max_iter"] = 50
+        # s_opts["mu_strategy"] = "adaptive"
+        opti.solver('ipopt', p_opts, s_opts)
+        # Solve
+        try:
+            sol = opti.solve()
+            output = make_table(pd.DataFrame(
+                {
+                    "Figure": [
+                        "CL",
+                        "CDi",
+                        "L/Di"
+                    ],
+                    "Value" : [
+                        sol.value(ap.CL),
+                        sol.value(ap.CDi),
+                        sol.value(ap.CL / ap.CDi),
+                    ]
+                }
+            ))
+        except:
+            sol = opti.debug
+            output = html.P(
+                "Aerodynamic analysis failed! Most likely the airplane is stalled at this flight condition."
+            )
+
+        figure = ap.draw(show=False)  # Generates figure
+
+    figure.update_layout(
+        autosize=True,
+        # width=1000,
+        # height=700,
+        margin=dict(
+            l=0,
+            r=0,
+            b=0,
+            t=0,
+        )
+    )
+
+    return (figure, output)
+
+
+try:  # wrapping this, since a forum post said it may be deprecated at some point.
+    app.title = "Aircraft Design with Dash"
+except:
+    print("Could not set the page title!")
+app.run_server(debug=False)
